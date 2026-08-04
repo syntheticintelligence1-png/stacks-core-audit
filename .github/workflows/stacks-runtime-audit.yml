@@ -1,0 +1,49 @@
+name: Stacks signer runtime audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  libsigner-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout audited release
+        uses: actions/checkout@v4
+        with:
+          ref: 62e03cc5551bfc574223c2b78ce04ceca30cec37
+          fetch-depth: 1
+
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.96.0 --profile minimal --no-self-update
+
+      - name: Run focused libsigner tests
+        env:
+          CARGO_BUILD_JOBS: 4
+          CARGO_INCREMENTAL: 0
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          RUSTFLAGS: -C debuginfo=0
+          RUST_BACKTRACE: "1"
+        run: |
+          set -o pipefail
+          rustup run 1.96.0 cargo test -p libsigner --lib --locked -- --test-threads=1 2>&1 | tee cargo-libsigner.log
+
+      - name: Capture runner state
+        if: always()
+        run: |
+          free -h
+          df -h
+          du -sh target 2>/dev/null || true
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libsigner-runtime-log
+          path: cargo-libsigner.log
+          if-no-files-found: ignore
