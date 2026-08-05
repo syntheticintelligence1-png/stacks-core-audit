@@ -1,6 +1,9 @@
 name: Stacks signer escalation runtime audit
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
