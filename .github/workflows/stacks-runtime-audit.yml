@@ -1,4 +1,4 @@
-name: Stacks signer runtime audit
+name: Stacks signer escalation runtime audit
 
 on:
   workflow_dispatch:
@@ -7,13 +7,24 @@ permissions:
   contents: read
 
 jobs:
-  libsigner-runtime:
+  signer-escalation-e2e:
+    name: Signer escalation end-to-end tests
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
+    env:
+      BITCOIND_TEST: "1"
+      BITCOIN_IMAGE_TAG: "25"
+      RUST_BACKTRACE: full
+      CARGO_BUILD_JOBS: "4"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTFLAGS: -C debuginfo=0
+
     steps:
       - name: Checkout audited release
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: 62e03cc5551bfc574223c2b78ce04ceca30cec37
           fetch-depth: 1
@@ -21,17 +32,56 @@ jobs:
       - name: Install pinned Rust
         run: rustup toolchain install 1.96.0 --profile minimal --no-self-update
 
-      - name: Run focused libsigner tests
+      - name: Install Bitcoin Core 25.0
         env:
-          CARGO_BUILD_JOBS: 4
-          CARGO_INCREMENTAL: 0
-          CARGO_PROFILE_DEV_DEBUG: 0
-          CARGO_PROFILE_TEST_DEBUG: 0
-          RUSTFLAGS: -C debuginfo=0
-          RUST_BACKTRACE: "1"
+          BITCOIN_VERSION: 25.0
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/bitcoin-${BITCOIN_VERSION}.tar.gz"
+          curl --fail --location --retry 4 --retry-delay 3 \
+            "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz" \
+            --output "$archive"
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/bitcoin-${BITCOIN_VERSION}/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bitcoin-${BITCOIN_VERSION}/bin/bitcoind" --version
+
+      - name: Run libsigner runtime tests
         run: |
           set -o pipefail
-          rustup run 1.96.0 cargo test -p libsigner --lib --locked -- --test-threads=1 2>&1 | tee cargo-libsigner.log
+          rustup run 1.96.0 cargo test -p libsigner --lib --locked -- --test-threads=1 2>&1 \
+            | tee cargo-libsigner.log
+
+      - name: Run stacks-signer state and database tests
+        run: |
+          set -o pipefail
+          rustup run 1.96.0 cargo test -p stacks-signer --lib --features testing --locked -- --test-threads=1 2>&1 \
+            | tee cargo-stacks-signer.log
+
+      - name: Run targeted signer/node integration tests
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          tests=(
+            tests::signer::v0::block_proposal_rejection
+            tests::signer::v0::block_validation_pending_table
+            tests::signer::v0::signers_do_not_commit_unless_threshold_precommitted
+            tests::signer::v0::signers_send_state_message_updates
+            tests::signer::v0::injected_signatures_are_ignored_across_boundaries
+          )
+
+          : > cargo-signer-e2e.log
+          for test_name in "${tests[@]}"; do
+            echo "===== RUNNING ${test_name} =====" | tee -a cargo-signer-e2e.log
+            timeout --signal=TERM 35m \
+              rustup run 1.96.0 cargo test -p stacks-node --bin stacks-node \
+                --features testing --locked -- "$test_name" --ignored --exact --test-threads=1 2>&1 \
+              | tee -a cargo-signer-e2e.log
+            if ! grep -qE 'running [1-9][0-9]* test' cargo-signer-e2e.log; then
+              echo "No matching runtime test was executed for ${test_name}" | tee -a cargo-signer-e2e.log
+              exit 1
+            fi
+            echo "===== PASSED ${test_name} =====" | tee -a cargo-signer-e2e.log
+          done
 
       - name: Capture runner state
         if: always()
@@ -40,10 +90,13 @@ jobs:
           df -h
           du -sh target 2>/dev/null || true
 
-      - name: Upload test log
+      - name: Upload runtime logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: libsigner-runtime-log
-          path: cargo-libsigner.log
+          name: stacks-signer-escalation-runtime-logs
+          path: |
+            cargo-libsigner.log
+            cargo-stacks-signer.log
+            cargo-signer-e2e.log
           if-no-files-found: ignore
