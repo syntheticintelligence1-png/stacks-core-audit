@@ -34,7 +34,7 @@ jobs:
 
       - name: Install Bitcoin Core 25.0
         env:
-          BITCOIN_VERSION: 25.0
+          BITCOIN_VERSION: "25.0"
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/bitcoin-${BITCOIN_VERSION}.tar.gz"
