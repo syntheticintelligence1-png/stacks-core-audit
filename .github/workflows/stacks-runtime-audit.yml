@@ -71,12 +71,14 @@ jobs:
 
           : > cargo-signer-e2e.log
           for test_name in "${tests[@]}"; do
+            before_lines=$(wc -l < cargo-signer-e2e.log)
             echo "===== RUNNING ${test_name} =====" | tee -a cargo-signer-e2e.log
             timeout --signal=TERM 35m \
               rustup run 1.96.0 cargo test -p stacks-node --bin stacks-node \
-                --features testing --locked -- "$test_name" --ignored --exact --test-threads=1 2>&1 \
+                --features testing --locked -- "$test_name" --ignored --test-threads=1 2>&1 \
               | tee -a cargo-signer-e2e.log
-            if ! grep -qE 'running [1-9][0-9]* test' cargo-signer-e2e.log; then
+            test_output=$(tail -n "+$((before_lines + 1))" cargo-signer-e2e.log)
+            if ! grep -qE 'running [1-9][0-9]* test' <<<"$test_output"; then
               echo "No matching runtime test was executed for ${test_name}" | tee -a cargo-signer-e2e.log
               exit 1
             fi
